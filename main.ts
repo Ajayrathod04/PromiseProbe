@@ -184,45 +184,114 @@ const observations: Observation[] = [
 
 const report = analyzePromises(promises, observations);
 
-out.human(
-  [
-    "# PromiseProbe",
-    "",
-    "Workflow Contract & Resilience Verification",
-    "",
-    `**VERDICT:** ${report.verdict}`,
-    `**SCORE:** ${report.score}/100`,
-    `**COVERAGE:** ${report.passed_checks}/${report.total_checks} checks passed`,
-    `**VIOLATIONS:** ${report.failed_checks}`,
-    "",
-    "## Promise Matrix",
-    "",
-    ...report.evaluations.map((evaluation) => {
-      const icon = evaluation.passed ? "✓" : "✗";
-      const state = evaluation.passed ? "HELD" : "BROKEN";
+  const verdictIcon = report.verdict === "PASS" ? "✓" : "⚠";
+  const verdictLabel = report.verdict === "PASS"
+    ? "ALL PROMISES HELD"
+    : "PROMISE VIOLATION";
 
-      return [
-        `${icon} **${evaluation.id}** — ${evaluation.case} — ${state}`,
-        `  expected=${evaluation.expected}`,
-        `  observed=${evaluation.observed}`,
-      ].join("\n");
-    }),
-    "",
-    report.violations.length > 0
-      ? [
-          "## Risk Signals",
-          "",
-          ...report.violations.map(
-            (violation) =>
-              `⚠ ${violation.id} — ${violation.case} — severity=${violation.severity}`,
-          ),
-        ].join("\n")
-      : "✓ No promise violations detected.",
-    "",
-    "> Does the workflow still behave as promised when reality changes?",
-  ].join("\n"),
-);
+  const matrix = report.evaluations.map((evaluation) => {
+    const icon = evaluation.passed ? "✓" : "✗";
+    const state = evaluation.passed ? "PASS" : "VIOLATION";
 
+    return [
+      `| ${evaluation.case} | ${evaluation.expected} | ${icon} ${state} |`,
+      `| | | observed: ${evaluation.observed} |`,
+    ].join("\n");
+  }).join("\n");
+
+  const risk = report.violations.length > 0
+    ? [
+        "## ⚠ RISK SIGNAL",
+        "",
+        ...report.violations.map(
+          (violation) =>
+            `**${violation.id}** — ${violation.case} — severity=${violation.severity}`,
+        ),
+        "",
+        "The workflow produced an observation that did not satisfy a declared promise.",
+      ].join("\n")
+    : "## ✓ NO PROMISE VIOLATIONS";
+
+  const nextAction = report.violations.length > 0
+    ? "Review the violated promise and add explicit handling for the failing case."
+    : "No corrective action required.";
+
+  const W = 46;
+  const pad = (text: string) => `│ ${text.slice(0, W - 4).padEnd(W - 4)} │`;
+  const line = "├" + "─".repeat(W - 2) + "┤";
+  const top = "┌" + "─".repeat(W - 2) + "┐";
+  const bottom = "└" + "─".repeat(W - 2) + "┘";
+
+  const centered = (text: string) => {
+    const inner = W - 4;
+    const clipped = text.slice(0, inner);
+    const left = Math.floor((inner - clipped.length) / 2);
+    return `│ ${" ".repeat(left)}${clipped}${" ".repeat(inner - left - clipped.length)} │`;
+  };
+
+  const metric = (label: string, value: string) =>
+    `│ ${label.padEnd(28)}${value.padStart(14)} │`;
+
+  const resultRows = report.evaluations.map((evaluation) => {
+    const icon = evaluation.passed ? "✓" : "✗";
+    const state = evaluation.passed ? "PASS" : "VIOLATION";
+    const caseName = `${evaluation.id} ${evaluation.case}`.slice(0, 15).padEnd(15);
+    const expected = evaluation.expected.slice(0, 13).padEnd(13);
+    const result = `${icon} ${state}`.slice(0, 13).padEnd(13);
+    return `│ ${caseName} │ ${expected} │ ${result} │`;
+  });
+
+  const violation = report.violations[0];
+
+  const violationRows = violation
+    ? [
+        pad("⚠ PROMISE VIOLATION"),
+        pad(""),
+        pad(`${violation.id} — ${violation.case} — ${violation.severity}`),
+        pad(""),
+        pad(`Expected: ${violation.expected}`),
+        pad(`Observed: ${violation.observed}`),
+      ]
+    : [
+        pad("✓ ALL DECLARED PROMISES HELD"),
+        pad(""),
+        pad("No promise violations detected."),
+      ];
+
+  const uiNextAction = violation
+    ? "Review violated promise and add"
+    : "No corrective action required.";
+
+  const uiNextAction2 = violation
+    ? "explicit handling for this case."
+    : "";
+
+  out.human(
+    [
+      "```text",
+      top,
+      centered("PROMISEPROBE"),
+      centered("Workflow Promise Verification"),
+      line,
+      metric("Reliability Score", `${report.score} / 100`),
+      metric("Promises Verified", `${report.passed_checks} / ${report.total_checks}`),
+      metric("Violations", `${report.failed_checks}`),
+      line,
+      pad("CASE            EXPECTED       RESULT"),
+      line,
+      ...resultRows,
+      line,
+      ...violationRows,
+      line,
+      pad("NEXT ACTION"),
+      pad(uiNextAction),
+      pad(uiNextAction2),
+      bottom,
+      "```",
+      "",
+      "> **Core question:** Does the workflow still behave as promised when reality changes?",
+    ].join("\n"),
+  );
 out.summary(
   `PromiseProbe: ${report.verdict}; score=${report.score}/100; ` +
     `${report.passed_checks}/${report.total_checks} checks passed; ` +

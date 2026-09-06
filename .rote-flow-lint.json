@@ -1,0 +1,9 @@
+{
+  "flow_name": "promise-probe",
+  "flow_path": "/home/ajay/.rote/flows/ajayrathod04/promise-probe/main.ts",
+  "static_checks_passed": true,
+  "runtime_checks_passed": true,
+  "violations": [],
+  "linted_at": "2026-09-06T16:54:28.000594588Z",
+  "rote_version": "0.80.0"
+}
