@@ -15,13 +15,20 @@
  * metadata:
  *   rote_version: 0.78.0
  *   version: 0.1.0
- *   status: draft
+ *   status: released
  *   kind: atomic
  *   flow_type: sequential
  *   execution_model: steps_with_presentation
  *   format: typescript
  *   requires_endpoints: []
  *   requires_sessions: false
+ *   discoverability:
+ *     tags:
+ *     - verification
+ *     - testing
+ *     - workflow
+ *     - resilience
+ *     - contracts
  *   contract:
  *     atomic: true
  *     input:
@@ -30,6 +37,32 @@
  *       format: json
  *       destination: stdout
  *     composable: true
+ * steps:
+ *   promise_definition:
+ *     type: process.exec
+ *     argv:
+ *     - cat
+ *     - '@resource{fixtures/promise.md}'
+ *   baseline_observation:
+ *     type: process.exec
+ *     argv:
+ *     - cat
+ *     - '@resource{fixtures/baseline-input.json}'
+ *   changed_observation:
+ *     type: process.exec
+ *     argv:
+ *     - cat
+ *     - '@resource{fixtures/changed-input.json}'
+ *   boundary_observation:
+ *     type: process.exec
+ *     argv:
+ *     - cat
+ *     - '@resource{fixtures/boundary-input.json}'
+ * presentation_fixtures:
+ *   promise_definition: resources/presentation-fixtures/promise_definition/fixture.yaml
+ *   baseline_observation: resources/presentation-fixtures/baseline_observation/fixture.yaml
+ *   changed_observation: resources/presentation-fixtures/changed_observation/fixture.yaml
+ *   boundary_observation: resources/presentation-fixtures/boundary_observation/fixture.yaml
  * ---
  */
 
@@ -47,18 +80,6 @@ type Observation = {
   input: string;
   output: string;
 };
-
-function getArg(name: string): string | undefined {
-  const prefix = `${name}=`;
-
-  for (const arg of Deno.args) {
-    if (arg.startsWith(prefix)) {
-      return arg.slice(prefix.length);
-    }
-  }
-
-  return undefined;
-}
 
 function parsePromises(markdown: string): PromiseRule[] {
   const rules: PromiseRule[] = [];
@@ -102,89 +123,119 @@ function parsePromises(markdown: string): PromiseRule[] {
   return rules;
 }
 
-async function readJson(path: string): Promise<Observation> {
-  return JSON.parse(await Deno.readTextFile(path));
-}
+function readProcessText(
+  ctx: Awaited<ReturnType<typeof loadPresentationContext>>,
+  step: ReturnType<Awaited<ReturnType<typeof loadPresentationContext>>["requireAvailable"]>,
+  name: string,
+): string {
 
-if (import.meta.main) {
-  const projectRoot = getArg("project_root") ?? Deno.cwd();
+  if (!isProcessExecBody(step.body)) {
+    throw new Error(`${name} did not record a process.exec observation`);
+  }
 
-  const promisePath =
-    getArg("promise_path") ??
-    `${projectRoot}/resources/fixtures/promise.md`;
-
-  const baselinePath =
-    getArg("baseline_path") ??
-    `${projectRoot}/resources/fixtures/baseline-input.json`;
-
-  const changedPath =
-    getArg("changed_path") ??
-    `${projectRoot}/resources/fixtures/changed-input.json`;
-
-  const boundaryPath =
-    getArg("boundary_path") ??
-    `${projectRoot}/resources/fixtures/boundary-input.json`;
-
-  const promises = parsePromises(
-    await Deno.readTextFile(promisePath),
-  );
-
-  const observations = await Promise.all([
-    readJson(baselinePath),
-    readJson(changedPath),
-    readJson(boundaryPath),
-  ]);
-
-  const report = analyzePromises(promises, observations);
-
-  console.log("");
-  console.log("╔══════════════════════════════════════════════════════════════╗");
-  console.log("║                      PROMISEPROBE                           ║");
-  console.log("║       Workflow Contract & Resilience Verification            ║");
-  console.log("╚══════════════════════════════════════════════════════════════╝");
-  console.log("");
-  console.log(`  VERDICT       ${report.verdict}`);
-  console.log(`  SCORE         ${report.score}/100`);
-  console.log(
-    `  COVERAGE      ${report.passed_checks}/${report.total_checks} checks passed`,
-  );
-  console.log(`  VIOLATIONS    ${report.failed_checks}`);
-  console.log("");
-  console.log("  ── PROMISE MATRIX ─────────────────────────────────────────");
-  console.log("");
-
-  for (const evaluation of report.evaluations) {
-    const icon = evaluation.passed ? "✓" : "✗";
-    const state = evaluation.passed ? "HELD" : "BROKEN";
-
-    console.log(
-      `  ${icon} ${evaluation.id.padEnd(7)} ${evaluation.case.padEnd(10)} ${state.padEnd(7)} expected=${evaluation.expected}`,
-    );
-    console.log(
-      `             observed=${evaluation.observed}`,
+  if (
+    step.body.status.exit.kind !== "code" ||
+    step.body.status.exit.code !== 0
+  ) {
+    throw new Error(
+      `${name} failed: ${step.body.stderr?.text ?? "no stderr captured"}`,
     );
   }
 
-  console.log("");
-
-  if (report.violations.length > 0) {
-    console.log("  ── RISK SIGNALS ───────────────────────────────────────────");
-    console.log("");
-
-    for (const violation of report.violations) {
-      console.log(
-        `  ⚠ ${violation.id}  ${violation.case}  severity=${violation.severity}`,
-      );
-    }
-  } else {
-    console.log("  ✓ No promise violations detected.");
+  const text = step.body.stdout?.text;
+  if (text === undefined) {
+    throw new Error(`${name} captured no stdout`);
   }
 
-  console.log("");
-  console.log("  PromiseProbe asks one question:");
-  console.log(
-    '  "Does the workflow still behave as promised when reality changes?"',
-  );
-  console.log("");
-
+  return text;
 }
+
+const {
+  FlowOutput,
+  isProcessExecBody,
+  loadPresentationContext,
+  stepName,
+} = await import("__ROTE_PRESENTATION_SDK__");
+
+const out = new FlowOutput();
+const ctx = await loadPresentationContext();
+
+if (ctx.run.status === "failed") {
+  out.result({
+    run_id: ctx.run.run_id,
+    verdict: "RUN_FAILED",
+    error: "One or more PromiseProbe effect steps failed.",
+  });
+  Deno.exit(1);
+}
+
+const promiseText = readProcessText(ctx, ctx.requireAvailable(stepName("promise_definition")), "promise_definition");
+const baselineText = readProcessText(ctx, ctx.requireAvailable(stepName("baseline_observation")), "baseline_observation");
+const changedText = readProcessText(ctx, ctx.requireAvailable(stepName("changed_observation")), "changed_observation");
+const boundaryText = readProcessText(ctx, ctx.requireAvailable(stepName("boundary_observation")), "boundary_observation");
+
+const promises = parsePromises(promiseText);
+
+const observations: Observation[] = [
+  JSON.parse(baselineText),
+  JSON.parse(changedText),
+  JSON.parse(boundaryText),
+];
+
+const report = analyzePromises(promises, observations);
+
+out.human(
+  [
+    "# PromiseProbe",
+    "",
+    "Workflow Contract & Resilience Verification",
+    "",
+    `**VERDICT:** ${report.verdict}`,
+    `**SCORE:** ${report.score}/100`,
+    `**COVERAGE:** ${report.passed_checks}/${report.total_checks} checks passed`,
+    `**VIOLATIONS:** ${report.failed_checks}`,
+    "",
+    "## Promise Matrix",
+    "",
+    ...report.evaluations.map((evaluation) => {
+      const icon = evaluation.passed ? "✓" : "✗";
+      const state = evaluation.passed ? "HELD" : "BROKEN";
+
+      return [
+        `${icon} **${evaluation.id}** — ${evaluation.case} — ${state}`,
+        `  expected=${evaluation.expected}`,
+        `  observed=${evaluation.observed}`,
+      ].join("\n");
+    }),
+    "",
+    report.violations.length > 0
+      ? [
+          "## Risk Signals",
+          "",
+          ...report.violations.map(
+            (violation) =>
+              `⚠ ${violation.id} — ${violation.case} — severity=${violation.severity}`,
+          ),
+        ].join("\n")
+      : "✓ No promise violations detected.",
+    "",
+    "> Does the workflow still behave as promised when reality changes?",
+  ].join("\n"),
+);
+
+out.summary(
+  `PromiseProbe: ${report.verdict}; score=${report.score}/100; ` +
+    `${report.passed_checks}/${report.total_checks} checks passed; ` +
+    `${report.failed_checks} violations`,
+);
+
+out.result({
+  run_id: ctx.run.run_id,
+  verdict: report.verdict,
+  score: report.score,
+  passed_checks: report.passed_checks,
+  total_checks: report.total_checks,
+  failed_checks: report.failed_checks,
+  evaluations: report.evaluations,
+  violations: report.violations,
+});
